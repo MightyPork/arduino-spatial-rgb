@@ -1,17 +1,18 @@
-#include <avr/io.h>          // register definitions
-#include <avr/pgmspace.h>    // storing data in program memory
-#include <avr/interrupt.h>   // interrupt vectors
-#include <util/delay.h>      // delay functions
+#include <avr/io.h>
+#include <avr/pgmspace.h>
+#include <util/delay.h>
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 
-// Include stuff from the library
+// Custom library files
 #include "lib/iopins.h"
 #include "lib/usart.h"
 #include "lib/nsdelay.h"
+
+// --- Pin assignments  ---
 
 #define WS_PIN 7
 
@@ -23,7 +24,13 @@
 #define ECHO2_PIN 8
 #define ECHO3_PIN 10
 
+
+/** Number of LEDs in your strip */
 #define LED_COUNT 30
+
+
+/** averaging buffer length (number of samples) */
+#define MBUF_LEN 16
 
 /** Phase of the measurement (state-machine state) */
 typedef enum {
@@ -31,10 +38,6 @@ typedef enum {
 	MEAS_WAIT_0,
 	MEAS_DONE
 } MeasPhase;
-
-
-// averaging buffer length (number of samples)
-#define MBUF_LEN 16
 
 /** Averaging buffer instance */
 typedef struct {
@@ -234,18 +237,16 @@ int main(void)
 	usart_puts_P(PSTR("\r\n"));
 	usart_puts_P(PSTR("(c) Ondrej Hruska 2016\r\n"));
 	usart_puts_P(PSTR("\r\n"));
-	usart_puts_P(PSTR("WS2812B LED strip - DIN: D7\r\n"));
-	usart_puts_P(PSTR("Sonars (HC-SR04) - trig/echo:\r\n"));
-	usart_puts_P(PSTR("  \"red\"   D3/D2\r\n"));
-	usart_puts_P(PSTR("  \"green\" D9/D8\r\n"));
-	usart_puts_P(PSTR("  \"blue\"  D11/D10\r\n"));
-	usart_puts_P(PSTR("\r\n"));
 	usart_puts_P(PSTR("===========================\r\n"));
 
 	int cnt = 0;
 
 	while (1) {
-		sonar_measure();
+		// This takes something close to 50 ms, varies with measured distances.
+		sonar_measure(); 
+
+		// Notice how the indicator blinking changes speed with distances
+		// You might want to do some adjustments here if you want 100% constant animation speed.
 
 		if (++cnt == 20) {
 			cnt = 0;

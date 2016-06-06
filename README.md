@@ -23,6 +23,6 @@ to be something really strange on OSX).
 
 - RGB LED strip with WS2812 or WS2812B. It's set up for a 30-led strip, adjust as needed.
 
+- Sonars: HC-SR04 (you can get them on eBay)
 
-
-
+Wiring is configured in the C file at the top - adjust pin numbers however you like.
