@@ -14,14 +14,17 @@
 
 // --- Pin assignments  ---
 
+// RGB data
 #define WS_PIN 7
 
+// Sonars
 #define TRIG1_PIN 3
-#define TRIG2_PIN 9
-#define TRIG3_PIN 11
-
 #define ECHO1_PIN 2
+
+#define TRIG2_PIN 9
 #define ECHO2_PIN 8
+
+#define TRIG3_PIN 11
 #define ECHO3_PIN 10
 
 
