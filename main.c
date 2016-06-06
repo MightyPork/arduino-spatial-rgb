@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 // Include stuff from the library
 #include "lib/iopins.h"
@@ -14,11 +15,13 @@
 
 static void sonar_start(void);
 
-#define WS_PIN 5
+#define WS_PIN 6
 
 #define TRIG_PIN 2
+
 #define ECHO1_PIN 3
 #define ECHO2_PIN 4
+#define ECHO3_PIN 5
 
 
 /** Wait long enough for the colors to show */
@@ -27,18 +30,6 @@ static void ws_show(void)
 	_delay_us(10);
 }
 
-static inline __attribute__((always_inline))
-void delay_cyc(uint8_t __count)
-{
-	__asm__ volatile (
-		"1: dec %0" "\n\t"
-		"brne 1b"
-		: "=r" (__count)
-		: "0" (__count)
-	);
-}
-
-
 /** Send one byte to the RGB strip */
 static inline  __attribute__((always_inline))
 void ws_send_byte(uint8_t bb)
@@ -46,13 +37,21 @@ void ws_send_byte(uint8_t bb)
 	for (int8_t i = 8; i > 0; i--) {
 		pin_up(WS_PIN);
 		if (bb & 0x80) {
-			delay_cyc(4);
+			__asm__ volatile ("nop");
+			__asm__ volatile ("nop");
+			__asm__ volatile ("nop");
+			__asm__ volatile ("nop");
+			__asm__ volatile ("nop");
 			pin_down(WS_PIN);
-			delay_cyc(1);
+			__asm__ volatile ("nop");
 		} else {
-			delay_cyc(1);
+			__asm__ volatile ("nop");
 			pin_down(WS_PIN);
-			delay_cyc(4);
+			__asm__ volatile ("nop");
+			__asm__ volatile ("nop");
+			__asm__ volatile ("nop");
+			__asm__ volatile ("nop");
+			__asm__ volatile ("nop");
 		}
 
 		bb = (uint8_t)(bb << 1);
@@ -73,9 +72,12 @@ static void hw_init(void)
 	usart_init(BAUD_115200);
 
 	as_output(2);
+
 	as_input_pu(3);
 	as_input_pu(4);
-	as_output(5); // WS
+	as_input_pu(5);
+
+	as_output(6); // WS
 }
 
 typedef enum {
@@ -85,44 +87,50 @@ typedef enum {
 } MeasPhase;
 
 
-#define PULSE_LEN 9
-const uint8_t pulse[PULSE_LEN] = {79, 150, 206, 243, 255, 243, 206, 150, 79};
-
-
-#define MBUF_LEN 64
+#define MBUF_LEN 16
 typedef struct {
 	float data[MBUF_LEN];
 } MBuf;
 
-float mbuf_add(MBuf *buf, float value)
+static float mbuf_add(MBuf *buf, float value)
 {
 	float aggr = value;
-	for (int i = 1; i < MBUF_LEN; i++) {
-		aggr += buf->data[i];
-		buf->data[i] = buf->data[i-1];
+	for (int i = MBUF_LEN - 1; i > 0; i--) {
+		float m = buf->data[i-1];
+		aggr += m;
+		buf->data[i] = m;
 	}
+
 	buf->data[0] = value;
 
 	return aggr / (float)MBUF_LEN;
 }
 
-MBuf mb_offs1;
-MBuf mb_offs2;
+static MBuf mb_offs1;
+static MBuf mb_offs2;
+static MBuf mb_offs3;
 
+typedef struct {
+	uint8_t r;
+	uint8_t g;
+	uint8_t b;
+} RGB;
+
+static RGB history[30];
 
 static void sonar_measure(void)
 {
-	usart_puts("MEASURE!\n");
-
 	pin_up(TRIG_PIN);
 	_delay_ms(10);
 	pin_down(TRIG_PIN);
 
 	MeasPhase e1_ph = MEAS_WAIT_1;
 	MeasPhase e2_ph = MEAS_WAIT_1;
+	MeasPhase e3_ph = MEAS_WAIT_1;
 
 	uint32_t echo1 = 0;
 	uint32_t echo2 = 0;
+	uint32_t echo3 = 0;
 
 	TCNT1 = 0;
 	TCCR1B = (0b010 << CS10);
@@ -159,7 +167,23 @@ static void sonar_measure(void)
 				break;
 		}
 
-		if (e1_ph == MEAS_DONE && e2_ph == MEAS_DONE) {
+		switch (e3_ph) {
+			case MEAS_WAIT_1:
+				if (pin_is_high(ECHO3_PIN)) {
+					echo3 = TCNT1;
+					e3_ph = MEAS_WAIT_0;
+				}
+				break;
+
+			case MEAS_WAIT_0:
+				if (pin_is_low(ECHO3_PIN)) {
+					echo3 = TCNT1 - echo3;
+					e3_ph = MEAS_DONE;
+				}
+				break;
+		}
+
+		if (e1_ph == MEAS_DONE && e2_ph == MEAS_DONE && e3_ph == MEAS_DONE) {
 			break; // done
 		}
 	}
@@ -176,54 +200,45 @@ static void sonar_measure(void)
 	echo2 *= 8000;
 	echo2 /= 10000;
 
-	char buf[10];
+	echo3 *= 8000;
+	echo3 /= 10000;
 
-	ltoa(echo1, buf, 10);
-	usart_puts("echo1: ");
-	usart_puts(buf);
-	usart_puts(" -> ");
+	float offset1 = 255 - echo1 / 25.0f;
+	float offset2 = 255 - echo2 / 25.0f;
+	float offset3 = 255 - echo3 / 25.0f;
 
-	float offset1 = echo1 / 100.0f;
-	float offset2 = echo2 / 100.0f;
+	if (offset1 > 255) offset1 = 255;
+	if (offset2 > 255) offset2 = 255;
+	if (offset3 > 255) offset3 = 255;
+	if (offset1 < 0) offset1 = 0;
+	if (offset2 < 0) offset2 = 0;
+	if (offset3 < 0) offset3 = 0;
 
 	offset1 = mbuf_add(&mb_offs1, offset1);
 	offset2 = mbuf_add(&mb_offs2, offset2);
+	offset3 = mbuf_add(&mb_offs3, offset3);
 
-	int of1i = (int) roundf(offset1);
-	int of2i = (int) roundf(offset2);
+	int c1 = (int) roundf(offset1);
+	int c2 = (int) roundf(offset2);
+	int c3 = (int) roundf(offset3);
 
-	of1i = 15 - of1i;
-	of2i = 15 - of2i;
+//	char buf[30];
 
-	int gi = -15 + PULSE_LEN/2 - of1i - 15;
-	int bi = -15 + PULSE_LEN/2 + of2i + 15;
-	int ri = -15 + PULSE_LEN/2 + 0;
+	for (int i = 30 - 1; i > 0; i--) {
+		history[i].r = history[i-1].r;
+		history[i].g = history[i-1].g;
+		history[i].b = history[i-1].b;
 
-	uint8_t r, g, b;
-	for (int i = 0; i < 32; i++) {
-		if (ri >= 0 && ri < PULSE_LEN) {
-			r = pulse[ri];
-		} else {
-			r = 0;
-		}
+//		sprintf(buf, "%d %d %d\n", history[i].r, history[i].g, history[i].b);
+//		usart_puts(buf);
+	}
 
-		if (gi >= 0 && gi < PULSE_LEN) {
-			g = pulse[gi];
-		} else {
-			g = 0;
-		}
+	history[0].r = (uint8_t)c1;
+	history[0].g = (uint8_t)c2;
+	history[0].b = (uint8_t)c3;
 
-		if (bi >= 0 && bi < PULSE_LEN) {
-			b = pulse[bi];
-		} else {
-			b = 0;
-		}
-
-		ws_send_rgb(r,g,b);
-
-		ri++;
-		gi++;
-		bi++;
+	for (int i = 0; i < 30; i++) {
+		ws_send_rgb(history[i].r, history[i].g, history[i].b);
 	}
 
 	ws_show();
@@ -236,6 +251,6 @@ int main(void)
 
 	while (1) {
 		sonar_measure();
-		_delay_ms(20);
+		_delay_ms(10);
 	}
 }
