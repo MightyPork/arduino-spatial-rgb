@@ -1,11 +1,28 @@
-# arduino-gamepad
-super simple gamepad project where Pro Mini is in a gamepad and sends keys over USART
+# Spatial RGB
 
-LED connected to D9 (on-board one at D13).
+## What
 
-Buttons connected from pins to ground with internal pull-up.
+- Arduino
+- 3 sonars
+- 3 colors in the spectrum
+- RGB led strip
+- Magic!
 
-Keys are sent as A - pressed, a - released (different letters), over UART at 115200 baud.
+## Building
 
-Key press is indicated by LED at D9.
+To run this project, you need Arduino Pro Mini, or Nano (those $2 eBay clones will work perfectly).
+You can also try to use a genuine Arduino, even larger (UNO), though I haven't tried that.
+
+To flash the firmware, run `make flash`. Adjustment the Makefile as needed. Naturally, you'll need 
+`avr-gcc` and `avrdude` installed (and Linux or OSX). 
+
+Make sure the correct Serial device is defined in the Makefile (`/dev/ttyUSB0` or other - it tends
+to be something really strange on OSX).
+
+## Hardware
+
+- RGB LED strip with WS2812 or WS2812B. It's set up for a 30-led strip, adjust as needed.
+
+
+
 

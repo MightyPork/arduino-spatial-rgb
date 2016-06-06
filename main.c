@@ -23,6 +23,53 @@
 #define ECHO2_PIN 8
 #define ECHO3_PIN 10
 
+#define LED_COUNT 30
+
+/** Phase of the measurement (state-machine state) */
+typedef enum {
+	MEAS_WAIT_1,
+	MEAS_WAIT_0,
+	MEAS_DONE
+} MeasPhase;
+
+
+// averaging buffer length (number of samples)
+#define MBUF_LEN 16
+
+/** Averaging buffer instance */
+typedef struct {
+	float data[MBUF_LEN];
+} MBuf;
+
+static MBuf mb_offs1;
+static MBuf mb_offs2;
+static MBuf mb_offs3;
+
+/** RGB color structure */
+typedef struct __attribute__((packed)) {
+	uint8_t r;
+	uint8_t g;
+	uint8_t b;
+} RGB;
+
+/** LED strip colors */
+static RGB history[LED_COUNT];
+
+/** Add a value to the averaging buffer. Returns currrent mean value */
+static float mbuf_add(MBuf *buf, float value)
+{
+	float aggr = value;
+	for (int i = MBUF_LEN - 1; i > 0; i--) {
+		float m = buf->data[i - 1];
+		aggr += m;
+		buf->data[i] = m;
+	}
+
+	buf->data[0] = value;
+
+	return aggr / (float)MBUF_LEN;
+}
+
 
 /** Wait long enough for the colors to show */
 static inline  __attribute__((always_inline))
@@ -35,6 +82,9 @@ void ws_show(void)
 static inline  __attribute__((always_inline))
 void ws_send_byte(uint8_t bb)
 {
+	// If your LEDs don't work right, you may need to adjust the number of NOPs here
+	// It's a good idea to debug this with oscilloscope or a logic analyzer
+
 	for (int8_t i = 8; i > 0; i--) {
 		pin_up(WS_PIN);
 		if (bb & 0x80) {
@@ -59,7 +109,7 @@ void ws_send_byte(uint8_t bb)
 	}
 }
 
-
+/** Send a RGB color to the strip */
 static void ws_send_rgb(uint8_t r, uint8_t g, uint8_t b)
 {
 	ws_send_byte(g);
@@ -67,7 +117,7 @@ static void ws_send_rgb(uint8_t r, uint8_t g, uint8_t b)
 	ws_send_byte(b);
 }
 
-
+/** Init hardware resources */
 static void hw_init(void)
 {
 	usart_init(BAUD_115200);
@@ -85,51 +135,18 @@ static void hw_init(void)
 	as_output(13);
 }
 
-typedef enum {
-	MEAS_WAIT_1,
-	MEAS_WAIT_0,
-	MEAS_DONE
-} MeasPhase;
-
-
-#define MBUF_LEN 16
-typedef struct {
-	float data[MBUF_LEN];
-} MBuf;
-
-static float mbuf_add(MBuf *buf, float value)
-{
-	float aggr = value;
-	for (int i = MBUF_LEN - 1; i > 0; i--) {
-		float m = buf->data[i - 1];
-		aggr += m;
-		buf->data[i] = m;
-	}
-
-	buf->data[0] = value;
-
-	return aggr / (float)MBUF_LEN;
-}
-
-static MBuf mb_offs1;
-static MBuf mb_offs2;
-static MBuf mb_offs3;
-
-typedef struct {
-	uint8_t r;
-	uint8_t g;
-	uint8_t b;
-} RGB;
-
-static RGB history[30];
-
-
-static uint16_t meas(MBuf *mbuf, uint8_t TRIG, uint8_t ECHO)
+/**
+ * Measure one ultrasonic sensor distance
+ *
+ * We could run all 3 at once, but then the sound waves tend to reflect
+ * into different receives and you get false readings.
+ */
+static uint8_t meas(MBuf *mbuf, uint8_t trig_pin, uint8_t echo_pin)
 {
 	_delay_ms(6);
-	pin_up_n(TRIG);
+	pin_up_n(trig_pin);
 	_delay_ms(1);
-	pin_down_n(TRIG);
+	pin_down_n(trig_pin);
 
 	MeasPhase meas_phase = MEAS_WAIT_1;
 
@@ -140,12 +157,12 @@ static uint16_t meas(MBuf *mbuf, uint8_t TRIG, uint8_t ECHO)
 
 	while (true) {
 		if (meas_phase == MEAS_WAIT_1) {
-			if (pin_is_high_n(ECHO)) {
+			if (pin_is_high_n(echo_pin)) {
 				echo = TCNT1;
 				meas_phase = MEAS_WAIT_0;
 			}
 		} else if (meas_phase == MEAS_WAIT_0) {
-			if (pin_is_low_n(ECHO)) {
+			if (pin_is_low_n(echo_pin)) {
 				echo = TCNT1 - echo;
 				break;
 			}
@@ -160,11 +177,13 @@ static uint16_t meas(MBuf *mbuf, uint8_t TRIG, uint8_t ECHO)
 
 	TCCR1B = 0; // stop
 
-	// Both pulses measured with 0.5us accuracy
+	// Pulse measured with 0.5us accuracy
+	// To convert to mm -> multiply by 0.8
 
-	// Convert to mm
+	// --- convert to R/G/B value 0-255 ---
 
-	float offset = 255 - echo / (1.25f * 25.0f); //25
+	// The number '25.0f' here determines the sensitivity
+	float offset = 255 - echo / (1.25f * 25.0f);
 
 	if (offset > 255) {
 		offset = 255;
@@ -172,31 +191,31 @@ static uint16_t meas(MBuf *mbuf, uint8_t TRIG, uint8_t ECHO)
 		offset = 0;
 	}
 
+	// averaging
 	offset = mbuf_add(mbuf, offset);
 
-	return (uint16_t) roundf(offset); // converted to RGB-level
+	// to int
+	return (uint8_t) roundf(offset);
 }
 
-
-
-
+/** Measure all 3 sensors and update the colors */
 static void sonar_measure(void)
 {
-	uint16_t c1 = meas(&mb_offs1, TRIG1_PIN, ECHO1_PIN);
-	uint16_t c2 = meas(&mb_offs2, TRIG2_PIN, ECHO2_PIN);
-	uint16_t c3 = meas(&mb_offs3, TRIG3_PIN, ECHO3_PIN);
+	uint8_t c1 = meas(&mb_offs1, TRIG1_PIN, ECHO1_PIN);
+	uint8_t c2 = meas(&mb_offs2, TRIG2_PIN, ECHO2_PIN);
+	uint8_t c3 = meas(&mb_offs3, TRIG3_PIN, ECHO3_PIN);
 
-	for (int i = 30 - 1; i > 0; i--) {
+	for (int i = LED_COUNT - 1; i > 0; i--) {
 		history[i].r = history[i - 1].r;
 		history[i].g = history[i - 1].g;
 		history[i].b = history[i - 1].b;
 	}
 
-	history[0].r = (uint8_t)c1;
-	history[0].g = (uint8_t)c2;
-	history[0].b = (uint8_t)c3;
+	history[0].r = c1;
+	history[0].g = c2;
+	history[0].b = c3;
 
-	for (int i = 0; i < 30; i++) {
+	for (int i = 0; i < LED_COUNT; i++) {
 		ws_send_rgb(history[i].r, history[i].g, history[i].b);
 	}
 
@@ -210,8 +229,8 @@ int main(void)
 
 	usart_puts_P(PSTR("===========================\r\n"));
 	usart_puts_P(PSTR("\r\n"));
-	usart_puts_P(PSTR("RGB SONAR DEMO\r\n"));
-	usart_puts_P(PSTR("FEL CVUT K338\r\n"));
+	usart_puts_P(PSTR("SPATIAL RGB - SONAR DEMO\r\n"));
+	usart_puts_P(PSTR("FEE CTU Prague, K338\r\n"));
 	usart_puts_P(PSTR("\r\n"));
 	usart_puts_P(PSTR("(c) Ondrej Hruska 2016\r\n"));
 	usart_puts_P(PSTR("\r\n"));
@@ -230,7 +249,7 @@ int main(void)
 
 		if (++cnt == 20) {
 			cnt = 0;
-			pin_toggle(13);
+			pin_toggle(13); // blink the indicator to show that we're OK
 		}
 	}
 }
