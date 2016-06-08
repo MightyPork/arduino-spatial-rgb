@@ -149,10 +149,22 @@ static void hw_init(void)
  */
 static uint8_t meas(MBuf *mbuf, uint8_t trig_pin, uint8_t echo_pin)
 {
+	// You may not need this 6ms delay, it's an attempt to avoid some strange
+	// behavior with cross-sensor reflections. 
 	_delay_ms(6);
+	// Even though they fire at different times, you still can get false readings
+	// (In my case, red + green sometimes cause blue to also turn on).
+	// This delay partially solved it for me, but YMMV.
+	
+	// --- Send the Trigger pulse ---
+	// The datasheet says you need 10 ms, but turns out 1 ms works just fine.
+	// Adjust as needed if this doesn't work for your sesors.
 	pin_up_n(trig_pin);
 	_delay_ms(1);
 	pin_down_n(trig_pin);
+	
+	// --- Wait for & measure the Echo pulse length ---
+	// We'll use a timer for this
 
 	MeasPhase meas_phase = MEAS_WAIT_1;
 
@@ -164,24 +176,27 @@ static uint8_t meas(MBuf *mbuf, uint8_t trig_pin, uint8_t echo_pin)
 	while (true) {
 		if (meas_phase == MEAS_WAIT_1) {
 			if (pin_is_high_n(echo_pin)) {
+				// rising edge
 				echo = TCNT1;
 				meas_phase = MEAS_WAIT_0;
 			}
 		} else if (meas_phase == MEAS_WAIT_0) {
 			if (pin_is_low_n(echo_pin)) {
+				// falling edge, we're done
 				echo = TCNT1 - echo;
 				break;
 			}
 		}
 
-		// timeout
+		// timeout - sometimes the sensor doesn't respond,
+		// and you'd get an infinite loop here.
 		if (TCNT1 >= 15000) {
 			echo = 15000;
 			break;
 		}
 	}
 
-	TCCR1B = 0; // stop
+	TCCR1B = 0; // stop the timer
 
 	// Pulse measured with 0.5us accuracy
 	// To convert to mm -> multiply by 0.8
